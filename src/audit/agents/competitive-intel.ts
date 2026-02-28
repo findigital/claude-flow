@@ -2,8 +2,11 @@
  * ARGUS Competitive Intelligence Agent
  *
  * Maps the organization's market position, competitive landscape,
- * partnerships, acquisitions, and growth trajectory through
- * open-source intelligence gathering.
+ * partnerships, acquisitions, and growth trajectory.
+ *
+ * Model routing:
+ *   sonar               — factual market data (cheap, fast)
+ *   sonar-reasoning-pro — strategic competitive analysis (multi-step CoT)
  */
 
 import type { AgentResult, CompetitiveIntelligence, AuditConfig } from '../types.js';
@@ -11,12 +14,12 @@ import { PerplexityClient } from '../perplexity-client.js';
 import { ClaudeClient } from '../claude-client.js';
 
 export class CompetitiveIntelAgent {
-  private perplexity: PerplexityClient;
+  private pplx: PerplexityClient;
   private claude: ClaudeClient;
   private config: AuditConfig;
 
-  constructor(perplexity: PerplexityClient, claude: ClaudeClient, config: AuditConfig) {
-    this.perplexity = perplexity;
+  constructor(pplx: PerplexityClient, claude: ClaudeClient, config: AuditConfig) {
+    this.pplx = pplx;
     this.claude = claude;
     this.config = config;
   }
@@ -31,41 +34,38 @@ export class CompetitiveIntelAgent {
     let intel: CompetitiveIntelligence = this.emptyIntel();
 
     try {
-      console.log('[COMP] Phase 1 — Market position and competitors...');
-      const marketResearch = await this.perplexity.deepResearch(
-        `${this.config.orgName} market position, competitors, and competitive landscape`,
-        [
-          `Who are ${this.config.orgName}'s main competitors? How does each compare in terms of market share, capabilities, and positioning?`,
-          `What is ${this.config.orgName}'s estimated market share in its primary markets?`,
-          `What are ${this.config.orgName}'s key competitive differentiators and unique advantages?`,
-          `What are ${this.config.orgName}'s known weaknesses or competitive vulnerabilities?`,
-        ]
+      // Phase 1: Factual market data via sonar (cheap — $1/$1 per 1M)
+      console.log('[COMP] Phase 1 — Market facts via sonar...');
+      const marketFacts = await this.pplx.quickSearch(
+        `${this.config.orgName} (${this.config.targetUrl}) competitive landscape: ` +
+        `Who are the main competitors? What is the estimated market share? ` +
+        `What companies has ${this.config.orgName} acquired? ` +
+        `What strategic partnerships and alliances exist? ` +
+        `What is the funding history, valuation, and investor information?`
       );
-      allSources.push(...marketResearch.citations);
+      allSources.push(...marketFacts.citations);
 
-      console.log('[COMP] Phase 2 — Partnerships, M&A, and growth...');
-      const growthResearch = await this.perplexity.deepResearch(
-        `${this.config.orgName} partnerships, acquisitions, funding, and growth`,
-        [
-          `What strategic partnerships and alliances has ${this.config.orgName} formed? Include technology partners, resellers, and ecosystem partnerships`,
-          `What companies has ${this.config.orgName} acquired? Include dates and strategic rationale`,
-          `What is ${this.config.orgName}'s funding history? Include rounds, amounts, investors, and valuation if available`,
-          `What is ${this.config.orgName}'s growth trajectory? Revenue growth, customer growth, market expansion`,
-        ]
+      // Phase 2: Strategic analysis via sonar-reasoning-pro ($2/$8 per 1M)
+      console.log('[COMP] Phase 2 — Strategic analysis via sonar-reasoning-pro...');
+      const stratAnalysis = await this.pplx.analyze(
+        `Conduct a strategic competitive analysis of ${this.config.orgName} (${this.config.targetUrl}). ` +
+        `Analyze: (1) Key competitive differentiators and moats — what makes them hard to displace? ` +
+        `(2) Competitive vulnerabilities and weaknesses that rivals could exploit. ` +
+        `(3) Growth trajectory assessment — is the company accelerating, stable, or decelerating? ` +
+        `(4) How do they compare to their top 3 competitors on key dimensions? ` +
+        `Rate each competitor as LOW / MEDIUM / HIGH threat level.`
       );
-      allSources.push(...growthResearch.citations);
+      allSources.push(...stratAnalysis.citations);
 
-      intel = this.parseIntelligence(marketResearch.content, growthResearch.content, allSources);
+      intel = this.parseIntelligence(marketFacts.content, stratAnalysis.content, allSources);
 
       if (this.claude.isAvailable && this.config.depth === 'deep') {
-        console.log('[COMP] Phase 3 — Claude strategic analysis...');
+        console.log('[COMP] Phase 3 — Claude strategic synthesis...');
         const synthesis = await this.claude.synthesizeIntelligence(
-          `Market Research:\n${marketResearch.content}\n\nGrowth Research:\n${growthResearch.content}`,
+          `Market Facts:\n${marketFacts.content}\n\nStrategic Analysis:\n${stratAnalysis.content}`,
           'Competitive Intelligence Assessment'
         );
-        if (synthesis) {
-          intel.marketPosition = synthesis;
-        }
+        if (synthesis) intel.marketPosition = synthesis;
       }
     } catch (e) {
       errors.push(`Competitive intel error: ${e}`);
@@ -88,20 +88,20 @@ export class CompetitiveIntelAgent {
   }
 
   private parseIntelligence(
-    marketContent: string,
-    growthContent: string,
+    factsContent: string,
+    analysisContent: string,
     sources: string[]
   ): CompetitiveIntelligence {
     return {
-      marketPosition: marketContent.slice(0, 2000),
-      marketShare: this.extractMarketShare(marketContent),
-      competitors: this.extractCompetitors(marketContent),
-      differentiators: this.extractListItems(marketContent, /differentiator|advantage|strength|unique/i),
-      weaknesses: this.extractListItems(marketContent, /weakness|vulnerabilit|challenge|disadvantage/i),
-      partnerships: this.extractPartnerships(growthContent),
-      acquisitions: this.extractListItems(growthContent, /acqui(?:red|sition)|bought|merged/i),
-      fundingHistory: this.extractSection(growthContent, /funding|raised|valuation|Series\s+[A-Z]/i),
-      growthTrajectory: this.extractSection(growthContent, /growth|revenue\s+growth|expand/i),
+      marketPosition: analysisContent.slice(0, 2000),
+      marketShare: this.extractMarketShare(factsContent),
+      competitors: this.extractCompetitors(analysisContent),
+      differentiators: this.extractByPattern(analysisContent, /differentiator|advantage|strength|unique|moat/i),
+      weaknesses: this.extractByPattern(analysisContent, /weakness|vulnerabilit|challenge|disadvantage|risk/i),
+      partnerships: this.extractPartnerships(factsContent),
+      acquisitions: this.extractByPattern(factsContent, /acqui(?:red|sition)|bought|merged/i),
+      fundingHistory: this.extractSection(factsContent, /funding|raised|valuation|Series\s+[A-Z]|IPO/i),
+      growthTrajectory: this.extractSection(analysisContent, /growth|trajectory|revenue\s+growth|expand|accelerat/i),
       sources: [...new Set(sources)],
     };
   }
@@ -111,52 +111,45 @@ export class CompetitiveIntelAgent {
     const lines = content.split('\n');
 
     for (const line of lines) {
-      if (/compet(?:itor|es|ing)|rival|versus|vs\.?|alternative/i.test(line) && line.length > 20) {
-        const nameMatch = line.match(/\*\*([^*]+)\*\*|([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)*)/);
-        if (nameMatch) {
-          const name = (nameMatch[1] ?? nameMatch[2] ?? '').trim();
-          if (name.length > 1 && name.length < 50) {
-            competitors.push({
-              name,
-              comparison: line.replace(/^[-•*]\s*/, '').trim().slice(0, 200),
-              threatLevel: 'MEDIUM',
-            });
-          }
-        }
-      }
+      if (!/compet|rival|versus|vs\.?|alternative|threat/i.test(line) || line.length < 20) continue;
+      const nameMatch = line.match(/\*\*([^*]+)\*\*|([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){0,2})/);
+      if (!nameMatch) continue;
+      const name = (nameMatch[1] ?? nameMatch[2] ?? '').trim();
+      if (name.length < 2 || name.length > 50) continue;
+
+      const threatLevel = /high\s+threat|major\s+competitor|primary\s+rival/i.test(line) ? 'HIGH' as const
+        : /low\s+threat|minor|niche/i.test(line) ? 'LOW' as const : 'MEDIUM' as const;
+
+      competitors.push({
+        name,
+        comparison: line.replace(/^[-•*\d.)\]]\s*/, '').trim().slice(0, 200),
+        threatLevel,
+      });
     }
 
     return competitors.slice(0, 10);
   }
 
   private extractPartnerships(content: string): CompetitiveIntelligence['partnerships'] {
-    const partnerships: CompetitiveIntelligence['partnerships'] = [];
-    const lines = content.split('\n');
-
-    for (const line of lines) {
-      if (/partner|alliance|collaboration|integrat/i.test(line) && line.length > 20) {
-        partnerships.push({
-          partner: line.match(/\*\*([^*]+)\*\*/)?.[1] ?? 'See details',
-          nature: line.replace(/^[-•*]\s*/, '').trim().slice(0, 200),
-          significance: 'Identified in research',
-        });
-      }
-    }
-
-    return partnerships.slice(0, 10);
+    return content.split('\n')
+      .filter(l => /partner|alliance|collaboration|integrat/i.test(l) && l.length > 20)
+      .slice(0, 10)
+      .map(l => ({
+        partner: l.match(/\*\*([^*]+)\*\*/)?.[1] ?? 'See details',
+        nature: l.replace(/^[-•*\d.)\]]\s*/, '').trim().slice(0, 200),
+        significance: 'Identified in research',
+      }));
   }
 
   private extractMarketShare(content: string): string {
-    const match = content.match(/market\s+share[^.]*?(\d+[%.]?\d*\s*%?[^.\n]*)/i);
-    return match?.[0]?.trim()?.slice(0, 200) ?? 'Not publicly available';
+    return content.match(/market\s+share[^.]*?(\d+[%.]?\d*\s*%?[^.\n]*)/i)?.[0]?.trim()?.slice(0, 200) ?? 'Not publicly available';
   }
 
-  private extractListItems(content: string, pattern: RegExp): string[] {
-    return content
-      .split('\n')
+  private extractByPattern(content: string, pattern: RegExp): string[] {
+    return content.split('\n')
       .filter(l => pattern.test(l) && l.length > 15)
       .slice(0, 8)
-      .map(l => l.replace(/^[-•*]\s*/, '').trim());
+      .map(l => l.replace(/^[-•*\d.)\]]\s*/, '').trim());
   }
 
   private extractSection(content: string, pattern: RegExp): string {
@@ -168,16 +161,9 @@ export class CompetitiveIntelAgent {
 
   private emptyIntel(): CompetitiveIntelligence {
     return {
-      marketPosition: '',
-      marketShare: '',
-      competitors: [],
-      differentiators: [],
-      weaknesses: [],
-      partnerships: [],
-      acquisitions: [],
-      fundingHistory: '',
-      growthTrajectory: '',
-      sources: [],
+      marketPosition: '', marketShare: '', competitors: [], differentiators: [],
+      weaknesses: [], partnerships: [], acquisitions: [], fundingHistory: '',
+      growthTrajectory: '', sources: [],
     };
   }
 }

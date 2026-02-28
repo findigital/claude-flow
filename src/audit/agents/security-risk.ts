@@ -2,8 +2,11 @@
  * ARGUS Security & Risk Agent
  *
  * Assesses the organization's security posture, compliance certifications,
- * historical breaches, regulatory risks, and supply chain vulnerabilities
- * through open-source intelligence (OSINT).
+ * historical breaches, regulatory risks, and supply chain vulnerabilities.
+ *
+ * Model routing:
+ *   sonar               — breach/incident factual lookup (cheap, fast)
+ *   sonar-reasoning-pro — risk analysis requiring multi-step reasoning
  */
 
 import type { AgentResult, SecurityRiskIntelligence, AuditConfig } from '../types.js';
@@ -11,12 +14,12 @@ import { PerplexityClient } from '../perplexity-client.js';
 import { ClaudeClient } from '../claude-client.js';
 
 export class SecurityRiskAgent {
-  private perplexity: PerplexityClient;
+  private pplx: PerplexityClient;
   private claude: ClaudeClient;
   private config: AuditConfig;
 
-  constructor(perplexity: PerplexityClient, claude: ClaudeClient, config: AuditConfig) {
-    this.perplexity = perplexity;
+  constructor(pplx: PerplexityClient, claude: ClaudeClient, config: AuditConfig) {
+    this.pplx = pplx;
     this.claude = claude;
     this.config = config;
   }
@@ -31,43 +34,38 @@ export class SecurityRiskAgent {
     let intel: SecurityRiskIntelligence = this.emptyIntel();
 
     try {
-      console.log('[SEC] Phase 1 — Security posture and breach history...');
-      const secResearch = await this.perplexity.deepResearch(
-        `${this.config.orgName} cybersecurity posture and data breach history`,
-        [
-          `Has ${this.config.orgName} experienced any data breaches, security incidents, or cyberattacks? Include dates, scale, and impact`,
-          `What security certifications does ${this.config.orgName} hold? (SOC 2, ISO 27001, FedRAMP, HIPAA, PCI-DSS, etc.)`,
-          `What is ${this.config.orgName}'s privacy policy and data handling approach? GDPR compliance?`,
-          `Any regulatory actions, fines, or legal issues related to data security or privacy at ${this.config.orgName}?`,
-          `What security products, features, or practices does ${this.config.orgName} publicly describe?`,
-        ]
+      // Phase 1: Factual security data via sonar (cheap — $1/$1 per 1M)
+      console.log('[SEC] Phase 1 — Security facts via sonar...');
+      const secFacts = await this.pplx.quickSearch(
+        `${this.config.orgName} (${this.config.targetUrl}) cybersecurity profile: ` +
+        `List any known data breaches or security incidents with dates and scale. ` +
+        `What security certifications do they hold (SOC 2, ISO 27001, FedRAMP, HIPAA, PCI-DSS, etc.)? ` +
+        `What is their privacy policy approach and GDPR compliance status? ` +
+        `Any regulatory fines, FTC actions, or legal issues related to data security?`
       );
-      allSources.push(...secResearch.citations);
+      allSources.push(...secFacts.citations);
 
-      console.log('[SEC] Phase 2 — Regulatory and reputation risks...');
-      const riskResearch = await this.perplexity.deepResearch(
-        `${this.config.orgName} regulatory risks, controversies, and reputation`,
-        [
-          `What regulatory challenges or government scrutiny has ${this.config.orgName} faced?`,
-          `Any lawsuits, legal disputes, or ethical controversies involving ${this.config.orgName}?`,
-          `What are the key business risks and vulnerabilities for ${this.config.orgName}?`,
-          `Does ${this.config.orgName} have any supply chain risks or key dependencies?`,
-          `What do critics and analysts say about ${this.config.orgName}'s risk profile?`,
-        ]
+      // Phase 2: Risk analysis via sonar-reasoning-pro ($2/$8 per 1M)
+      console.log('[SEC] Phase 2 — Risk analysis via sonar-reasoning-pro...');
+      const riskAnalysis = await this.pplx.analyze(
+        `Conduct a multi-factor risk analysis of ${this.config.orgName} (${this.config.targetUrl}). ` +
+        `Assess: (1) regulatory risks and government scrutiny, ` +
+        `(2) reputation risks from controversies or public criticism, ` +
+        `(3) supply chain and vendor dependency risks, ` +
+        `(4) key business risks and strategic vulnerabilities. ` +
+        `For each risk, rate the severity and provide evidence.`
       );
-      allSources.push(...riskResearch.citations);
+      allSources.push(...riskAnalysis.citations);
 
-      intel = this.parseIntelligence(secResearch.content, riskResearch.content, allSources);
+      intel = this.parseIntelligence(secFacts.content, riskAnalysis.content, allSources);
 
       if (this.claude.isAvailable && this.config.depth !== 'quick') {
         console.log('[SEC] Phase 3 — Claude risk synthesis...');
         const synthesis = await this.claude.synthesizeIntelligence(
-          `Security Research:\n${secResearch.content}\n\nRisk Research:\n${riskResearch.content}`,
+          `Security Facts:\n${secFacts.content}\n\nRisk Analysis:\n${riskAnalysis.content}`,
           'Security & Risk Assessment'
         );
-        if (synthesis) {
-          intel.overallPosture = synthesis;
-        }
+        if (synthesis) intel.overallPosture = synthesis;
       }
     } catch (e) {
       errors.push(`Security risk error: ${e}`);
@@ -96,13 +94,13 @@ export class SecurityRiskAgent {
   ): SecurityRiskIntelligence {
     const breaches = this.extractBreaches(secContent);
     const certs = this.extractCertifications(secContent);
-    const incidents = this.extractIncidents(secContent);
-    const regRisks = this.extractRegulatoryRisks(riskContent);
-    const repRisks = this.extractReputationRisks(riskContent);
-    const supplyRisks = this.extractSupplyChainRisks(riskContent);
+    const incidents = this.extractByPattern(secContent, /incident|vulnerability|attack|exploit/i);
+    const regRisks = this.extractByPattern(riskContent, /regulat|lawsuit|fine|penalty|investigation|antitrust|FTC|SEC|DOJ/i);
+    const repRisks = this.extractByPattern(riskContent, /controvers|critic|backlash|scandal|protest|ethic/i);
+    const supplyRisks = this.extractByPattern(riskContent, /supply\s*chain|depend|vendor|third.?party|concentrat/i);
     const privacy = this.extractSection(secContent, /privacy|GDPR|data\s+(?:protection|handling)/i);
 
-    const riskScore = this.calculateRiskScore(breaches, incidents, regRisks, repRisks);
+    const riskScore = this.calculateRiskScore(breaches.length, incidents.length, regRisks.length, repRisks.length);
 
     return {
       overallPosture: secContent.slice(0, 2000),
@@ -120,72 +118,36 @@ export class SecurityRiskAgent {
   }
 
   private extractBreaches(content: string): SecurityRiskIntelligence['knownBreaches'] {
-    const breaches: SecurityRiskIntelligence['knownBreaches'] = [];
-    const lines = content.split('\n');
-
-    for (const line of lines) {
-      if (/breach|hack|compromis|leak|expos(?:ed|ure)|incident/i.test(line) && line.length > 30) {
-        const dateMatch = line.match(/\b((?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4}|\d{4})\b/i);
-        breaches.push({
-          date: dateMatch?.[1] ?? 'Unknown date',
-          description: line.replace(/^[-•*]\s*/, '').trim().slice(0, 300),
-          impact: 'See description',
-          resolution: '',
-        });
-      }
-    }
-
-    return breaches.slice(0, 10);
+    return content.split('\n')
+      .filter(l => /breach|hack|compromis|leak|expos(?:ed|ure)/i.test(l) && l.length > 30)
+      .slice(0, 10)
+      .map(l => ({
+        date: l.match(/\b((?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4}|\d{4})\b/i)?.[1] ?? 'Unknown',
+        description: l.replace(/^[-•*\d.)\]]\s*/, '').trim().slice(0, 300),
+        impact: 'See description',
+        resolution: '',
+      }));
   }
 
   private extractCertifications(content: string): string[] {
-    const certs: string[] = [];
-    const certPatterns = [
+    const patterns = [
       /SOC\s*2/i, /ISO\s*27001/i, /FedRAMP/i, /HIPAA/i, /PCI[\s-]DSS/i,
       /GDPR/i, /SOX/i, /CCPA/i, /ISO\s*9001/i, /NIST/i, /CMMC/i,
       /StateRAMP/i, /ITAR/i, /ISO\s*42001/i, /CSA\s*STAR/i,
     ];
-
-    for (const pattern of certPatterns) {
-      if (pattern.test(content)) {
-        const match = content.match(pattern);
-        if (match) certs.push(match[0]);
-      }
+    const found: string[] = [];
+    for (const p of patterns) {
+      const m = content.match(p);
+      if (m) found.push(m[0]);
     }
-
-    return [...new Set(certs)];
+    return [...new Set(found)];
   }
 
-  private extractIncidents(content: string): string[] {
-    return content
-      .split('\n')
-      .filter(l => /incident|vulnerability|attack|exploit/i.test(l) && l.length > 20)
+  private extractByPattern(content: string, pattern: RegExp): string[] {
+    return content.split('\n')
+      .filter(l => pattern.test(l) && l.length > 20)
       .slice(0, 8)
-      .map(l => l.replace(/^[-•*]\s*/, '').trim());
-  }
-
-  private extractRegulatoryRisks(content: string): string[] {
-    return content
-      .split('\n')
-      .filter(l => /regulat|lawsuit|fine|penalty|investigation|antitrust|FTC|SEC|DOJ/i.test(l) && l.length > 20)
-      .slice(0, 8)
-      .map(l => l.replace(/^[-•*]\s*/, '').trim());
-  }
-
-  private extractReputationRisks(content: string): string[] {
-    return content
-      .split('\n')
-      .filter(l => /controvers|critic|backlash|scandal|protest|ethic/i.test(l) && l.length > 20)
-      .slice(0, 8)
-      .map(l => l.replace(/^[-•*]\s*/, '').trim());
-  }
-
-  private extractSupplyChainRisks(content: string): string[] {
-    return content
-      .split('\n')
-      .filter(l => /supply\s*chain|depend|vendor|third.?party|concentrat/i.test(l) && l.length > 20)
-      .slice(0, 5)
-      .map(l => l.replace(/^[-•*]\s*/, '').trim());
+      .map(l => l.replace(/^[-•*\d.)\]]\s*/, '').trim());
   }
 
   private extractSection(content: string, pattern: RegExp): string {
@@ -195,33 +157,15 @@ export class SecurityRiskAgent {
     return lines.slice(idx, idx + 5).join('\n').trim().slice(0, 500);
   }
 
-  private calculateRiskScore(
-    breaches: unknown[],
-    incidents: string[],
-    regRisks: string[],
-    repRisks: string[]
-  ): number {
-    let score = 25;
-    score += breaches.length * 12;
-    score += incidents.length * 5;
-    score += regRisks.length * 8;
-    score += repRisks.length * 4;
-    return Math.min(100, score);
+  private calculateRiskScore(breaches: number, incidents: number, regRisks: number, repRisks: number): number {
+    return Math.min(100, 25 + breaches * 12 + incidents * 5 + regRisks * 8 + repRisks * 4);
   }
 
   private emptyIntel(): SecurityRiskIntelligence {
     return {
-      overallPosture: '',
-      riskScore: 0,
-      knownBreaches: [],
-      complianceCertifications: [],
-      privacyPolicySummary: '',
-      dataHandlingPractices: '',
-      securityIncidents: [],
-      regulatoryRisks: [],
-      reputationRisks: [],
-      supplyChainRisks: [],
-      sources: [],
+      overallPosture: '', riskScore: 0, knownBreaches: [], complianceCertifications: [],
+      privacyPolicySummary: '', dataHandlingPractices: '', securityIncidents: [],
+      regulatoryRisks: [], reputationRisks: [], supplyChainRisks: [], sources: [],
     };
   }
 }

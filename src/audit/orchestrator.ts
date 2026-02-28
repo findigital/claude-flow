@@ -1,9 +1,17 @@
 /**
  * ARGUS Swarm Orchestrator
  *
- * Coordinates the agent swarm: initializes claude-flow coordination,
- * dispatches all agents in parallel, collects results, and triggers
- * report generation.
+ * Coordinates the agent swarm with cost-optimized model routing:
+ *
+ *   Agent              | Model(s) Used                          | Why
+ *   ──────────────────-|────────────────────────────────────────|──────────────
+ *   Reconnaissance     | sonar + sonar-reasoning-pro            | Facts cheap, analysis mid
+ *   Tech Intelligence  | sonar-deep-research (low/medium)       | Justifies premium for exhaustive AI/tech mapping
+ *   Security & Risk    | sonar + sonar-reasoning-pro            | Facts cheap, risk analysis mid
+ *   Competitive Intel  | sonar + sonar-reasoning-pro            | Facts cheap, strategy mid
+ *
+ * Only 1 deep-research query per audit. All others use sonar ($1/$1) or
+ * sonar-reasoning-pro ($2/$8) to keep costs practical.
  */
 
 import { execSync } from 'child_process';
@@ -15,7 +23,6 @@ import type {
   SecurityRiskIntelligence,
   CompetitiveIntelligence,
   RiskMatrixEntry,
-  ThreatLevel,
 } from './types.js';
 import { PerplexityClient } from './perplexity-client.js';
 import { ClaudeClient } from './claude-client.js';
@@ -32,7 +39,7 @@ export class AuditOrchestrator {
 
   constructor(config: AuditConfig) {
     this.config = config;
-    this.perplexity = new PerplexityClient(undefined, config.perplexityModel);
+    this.perplexity = new PerplexityClient();
     this.claude = new ClaudeClient();
   }
 
@@ -46,12 +53,14 @@ export class AuditOrchestrator {
     console.log('║        ARGUS AGENT SWARM — INTELLIGENCE COLLECTION          ║');
     console.log('╚══════════════════════════════════════════════════════════════╝\n');
 
+    this.printModelStrategy();
+
     const reconAgent = new ReconnaissanceAgent(this.perplexity, this.claude, this.config);
     const techAgent = new TechIntelligenceAgent(this.perplexity, this.claude, this.config);
     const secAgent = new SecurityRiskAgent(this.perplexity, this.claude, this.config);
     const compAgent = new CompetitiveIntelAgent(this.perplexity, this.claude, this.config);
 
-    console.log('[SWARM] Dispatching 4 agents (staggered to respect rate limits)...\n');
+    console.log('[SWARM] Dispatching 4 agents sequentially...\n');
 
     const reconResult = await reconAgent.execute();
     console.log('');
@@ -64,21 +73,14 @@ export class AuditOrchestrator {
     console.log('\n[SWARM] All agents reported. Compiling intelligence...\n');
 
     const allSources = [
-      ...reconResult.sources,
-      ...techResult.sources,
-      ...secResult.sources,
-      ...compResult.sources,
+      ...reconResult.sources, ...techResult.sources,
+      ...secResult.sources, ...compResult.sources,
     ];
     const uniqueSources = [...new Set(allSources)];
 
-    const riskMatrix = this.buildRiskMatrix(
-      secResult.data,
-      compResult.data,
-      techResult.data
-    );
+    const riskMatrix = this.buildRiskMatrix(secResult.data, compResult.data, techResult.data);
 
     let executiveSummary = '';
-    let recommendations = '';
 
     if (this.claude.isAvailable) {
       console.log('[SYNTH] Generating executive summary via Claude...');
@@ -90,20 +92,14 @@ export class AuditOrchestrator {
       });
 
       console.log('[SYNTH] Generating strategic recommendations via Claude...');
-      recommendations = await this.claude.generateStrategicRecommendations(
+      await this.claude.generateStrategicRecommendations(
         `${this.config.orgName} — ${reconResult.data.industry}`,
-        [
-          secResult.data.overallPosture,
-          techResult.data.engineeringCulture,
-          compResult.data.marketPosition,
-        ].join('\n\n')
+        [secResult.data.overallPosture, techResult.data.engineeringCulture, compResult.data.marketPosition].join('\n\n')
       );
     }
 
     if (!executiveSummary) {
-      executiveSummary = this.generateFallbackSummary(
-        reconResult.data, techResult.data, secResult.data, compResult.data
-      );
+      executiveSummary = this.generateFallbackSummary(reconResult.data, techResult.data, secResult.data, compResult.data);
     }
 
     const totalDuration = Date.now() - startTime;
@@ -133,14 +129,10 @@ export class AuditOrchestrator {
       allSources: uniqueSources,
     };
 
-    console.log(`\n[SWARM] Audit complete in ${(totalDuration / 1000).toFixed(1)}s`);
-    console.log(`[SWARM] ${this.perplexity.totalQueries} research queries executed`);
-    console.log(`[SWARM] ${uniqueSources.length} unique sources collected`);
-
     const generator = new ReportGenerator();
     const outputPath = generator.generate(report, this.config.outputDir);
-    console.log(`\n[OUTPUT] Report written to: ${outputPath}`);
 
+    this.printCostSummary(totalDuration, uniqueSources.length, outputPath);
     this.reportCompletion(totalDuration);
 
     return report;
@@ -169,13 +161,47 @@ export class AuditOrchestrator {
     `);
   }
 
+  private printModelStrategy(): void {
+    console.log('┌─────────────────────────────────────────────────────────────────┐');
+    console.log('│  MODEL ROUTING STRATEGY (cost-optimized)                        │');
+    console.log('├──────────────────────┬──────────────────────────┬───────────────┤');
+    console.log('│  Agent               │  Model                   │  Cost Tier    │');
+    console.log('├──────────────────────┼──────────────────────────┼───────────────┤');
+    console.log('│  Reconnaissance      │  sonar + reasoning-pro   │  $  LOW+MID   │');
+    console.log('│  Tech Intelligence   │  sonar-deep-research     │  $$$ PREMIUM  │');
+    console.log('│  Security & Risk     │  sonar + reasoning-pro   │  $  LOW+MID   │');
+    console.log('│  Competitive Intel   │  sonar + reasoning-pro   │  $  LOW+MID   │');
+    console.log('└──────────────────────┴──────────────────────────┴───────────────┘');
+    console.log('');
+  }
+
+  private printCostSummary(totalDuration: number, sourceCount: number, outputPath: string): void {
+    const usage = this.perplexity.modelUsageSummary;
+    const totalCost = this.perplexity.totalCostUsd;
+
+    console.log('\n╔══════════════════════════════════════════════════════════════╗');
+    console.log('║                    AUDIT COMPLETE                            ║');
+    console.log('╚══════════════════════════════════════════════════════════════╝');
+    console.log('');
+    console.log(`  Duration:       ${(totalDuration / 1000).toFixed(1)}s`);
+    console.log(`  Queries:        ${this.perplexity.totalQueries}`);
+    console.log(`  Sources:        ${sourceCount} unique`);
+    console.log(`  Est. API Cost:  $${totalCost.toFixed(4)}`);
+    console.log('');
+    console.log('  Model Breakdown:');
+
+    for (const [model, stats] of Object.entries(usage)) {
+      console.log(`    ${model.padEnd(24)} ${stats.queries} queries   ~$${stats.estimatedCost.toFixed(4)}`);
+    }
+
+    console.log('');
+    console.log(`  Report: ${outputPath}`);
+  }
+
   private initializeSwarm(): void {
     try {
       const cliPath = `${process.cwd()}/v3/@claude-flow/cli/bin/cli.js`;
-      execSync(
-        `node ${cliPath} swarm init --topology hierarchical --max-agents 5 2>/dev/null`,
-        { encoding: 'utf-8', timeout: 5000 }
-      );
+      execSync(`node ${cliPath} swarm init --topology hierarchical --max-agents 5 2>/dev/null`, { encoding: 'utf-8', timeout: 5000 });
       console.log('[SWARM] Claude Flow coordination initialized');
     } catch {
       console.log('[SWARM] Running in standalone mode (claude-flow coordination optional)');
@@ -187,109 +213,46 @@ export class AuditOrchestrator {
       const cliPath = `${process.cwd()}/v3/@claude-flow/cli/bin/cli.js`;
       execSync(
         `node ${cliPath} memory store --key "argus-audit-${this.config.orgName}" ` +
-        `--value "Audit completed in ${(durationMs / 1000).toFixed(1)}s for ${this.config.orgName}" ` +
+        `--value "Audit: ${(durationMs / 1000).toFixed(1)}s, ${this.perplexity.totalQueries} queries, ~$${this.perplexity.totalCostUsd.toFixed(4)}" ` +
         `--namespace patterns 2>/dev/null`,
         { encoding: 'utf-8', timeout: 10000 }
       );
-    } catch {
-      // non-critical
-    }
+    } catch { /* non-critical */ }
   }
 
-  private buildRiskMatrix(
-    sec: SecurityRiskIntelligence,
-    comp: CompetitiveIntelligence,
-    tech: TechIntelligence
-  ): RiskMatrixEntry[] {
+  private buildRiskMatrix(sec: SecurityRiskIntelligence, comp: CompetitiveIntelligence, tech: TechIntelligence): RiskMatrixEntry[] {
     const matrix: RiskMatrixEntry[] = [];
 
     if (sec.knownBreaches.length > 0) {
-      matrix.push({
-        category: 'Cybersecurity',
-        riskName: 'Historical Data Breaches',
-        likelihood: 7,
-        impact: 9,
-        riskScore: 63,
-        threatLevel: 'HIGH',
-        description: `${sec.knownBreaches.length} historical breach(es) identified`,
-        mitigations: ['Enhanced monitoring', 'Incident response review', 'Third-party audit'],
-      });
+      matrix.push({ category: 'Cybersecurity', riskName: 'Historical Data Breaches', likelihood: 7, impact: 9, riskScore: 63, threatLevel: 'HIGH', description: `${sec.knownBreaches.length} breach(es)`, mitigations: ['Enhanced monitoring', 'Incident response review'] });
     }
-
     if (sec.regulatoryRisks.length > 0) {
-      matrix.push({
-        category: 'Regulatory',
-        riskName: 'Regulatory Exposure',
-        likelihood: 6,
-        impact: 8,
-        riskScore: 48,
-        threatLevel: 'HIGH',
-        description: `${sec.regulatoryRisks.length} regulatory risk indicator(s)`,
-        mitigations: ['Compliance program review', 'Legal counsel engagement'],
-      });
+      matrix.push({ category: 'Regulatory', riskName: 'Regulatory Exposure', likelihood: 6, impact: 8, riskScore: 48, threatLevel: 'HIGH', description: `${sec.regulatoryRisks.length} indicator(s)`, mitigations: ['Compliance review', 'Legal counsel'] });
     }
-
     if (comp.weaknesses.length > 0) {
-      matrix.push({
-        category: 'Competitive',
-        riskName: 'Competitive Vulnerabilities',
-        likelihood: 5,
-        impact: 6,
-        riskScore: 30,
-        threatLevel: 'MEDIUM',
-        description: `${comp.weaknesses.length} competitive weakness(es) identified`,
-        mitigations: ['Strategic positioning review', 'Differentiation investment'],
-      });
+      matrix.push({ category: 'Competitive', riskName: 'Competitive Vulnerabilities', likelihood: 5, impact: 6, riskScore: 30, threatLevel: 'MEDIUM', description: `${comp.weaknesses.length} weakness(es)`, mitigations: ['Strategic positioning', 'Differentiation'] });
     }
-
     if (tech.aiCapabilities.length === 0) {
-      matrix.push({
-        category: 'Technology',
-        riskName: 'AI Capability Gap',
-        likelihood: 7,
-        impact: 7,
-        riskScore: 49,
-        threatLevel: 'MEDIUM',
-        description: 'Limited or no AI capabilities detected',
-        mitigations: ['AI strategy development', 'Talent acquisition', 'Partnership evaluation'],
-      });
+      matrix.push({ category: 'Technology', riskName: 'AI Capability Gap', likelihood: 7, impact: 7, riskScore: 49, threatLevel: 'MEDIUM', description: 'No AI capabilities detected', mitigations: ['AI strategy', 'Talent acquisition'] });
     }
-
-    matrix.push({
-      category: 'Operational',
-      riskName: 'Supply Chain Dependencies',
-      likelihood: 4,
-      impact: 7,
-      riskScore: 28,
-      threatLevel: sec.supplyChainRisks.length > 2 ? 'HIGH' : 'MEDIUM',
-      description: `${sec.supplyChainRisks.length} supply chain risk(s) identified`,
-      mitigations: ['Vendor diversification', 'Business continuity planning'],
-    });
+    matrix.push({ category: 'Operational', riskName: 'Supply Chain Dependencies', likelihood: 4, impact: 7, riskScore: 28, threatLevel: sec.supplyChainRisks.length > 2 ? 'HIGH' : 'MEDIUM', description: `${sec.supplyChainRisks.length} risk(s)`, mitigations: ['Vendor diversification', 'BCP'] });
 
     return matrix.sort((a, b) => b.riskScore - a.riskScore);
   }
 
-  private generateFallbackSummary(
-    recon: OrgIntelligence,
-    tech: TechIntelligence,
-    sec: SecurityRiskIntelligence,
-    comp: CompetitiveIntelligence
-  ): string {
+  private generateFallbackSummary(recon: OrgIntelligence, tech: TechIntelligence, sec: SecurityRiskIntelligence, comp: CompetitiveIntelligence): string {
     return [
       `## Executive Summary — ${recon.name}`,
       '',
-      `**BLUF**: ${recon.name} is a ${recon.industry} organization ` +
-      `${recon.headquarters ? `headquartered in ${recon.headquarters}` : ''}. ` +
-      `The security risk score is ${sec.riskScore}/100 (${sec.riskScore <= 40 ? 'acceptable' : 'elevated'}). ` +
-      `${tech.aiCapabilities.length} AI capabilities were identified across the organization.`,
+      `**BLUF**: ${recon.name} is a ${recon.industry} organization` +
+      `${recon.headquarters ? ` headquartered in ${recon.headquarters}` : ''}. ` +
+      `Security risk score: ${sec.riskScore}/100 (${sec.riskScore <= 40 ? 'acceptable' : 'elevated'}). ` +
+      `${tech.aiCapabilities.length} AI capabilities identified.`,
       '',
       '**Key Findings:**',
-      `- Technology: ${tech.techStack.length} technology categories mapped, ${tech.aiCapabilities.length} AI capabilities detected`,
-      `- Security: Risk score ${sec.riskScore}/100, ${sec.knownBreaches.length} historical breach(es), ` +
-      `${sec.complianceCertifications.length} compliance certification(s)`,
-      `- Competitive: ${comp.competitors.length} competitors identified, ` +
-      `${comp.partnerships.length} partnerships mapped`,
-      `- Sources: ${recon.sources.length + tech.sources.length + sec.sources.length + comp.sources.length} sources consulted`,
+      `- Tech: ${tech.techStack.length} categories, ${tech.aiCapabilities.length} AI capabilities`,
+      `- Security: ${sec.riskScore}/100 risk, ${sec.knownBreaches.length} breach(es), ${sec.complianceCertifications.length} cert(s)`,
+      `- Competitive: ${comp.competitors.length} competitors, ${comp.partnerships.length} partnerships`,
     ].join('\n');
   }
 
@@ -297,23 +260,18 @@ export class AuditOrchestrator {
     return [
       '## Methodology',
       '',
-      'This assessment was conducted using the ARGUS (Agent-based Research & Governance',
-      'Unified Scanner) framework, which employs a coordinated swarm of specialized',
-      'intelligence agents:',
+      'This assessment was conducted using ARGUS with cost-optimized multi-model routing:',
       '',
-      '1. **Reconnaissance Agent** — Organization profiling via deep web research',
-      '2. **Technology Intelligence Agent** — Tech stack and AI capability mapping',
-      '3. **Security & Risk Agent** — OSINT-based security posture assessment',
-      '4. **Competitive Intelligence Agent** — Market and competitive landscape analysis',
+      '| Agent | Model | Rationale |',
+      '|-------|-------|-----------|',
+      '| Reconnaissance | sonar + sonar-reasoning-pro | Factual lookup (cheap) + news analysis (mid-tier) |',
+      '| Tech Intelligence | sonar-deep-research | Exhaustive AI/tech mapping justifies premium model |',
+      '| Security & Risk | sonar + sonar-reasoning-pro | Breach facts (cheap) + risk reasoning (mid-tier) |',
+      '| Competitive Intel | sonar + sonar-reasoning-pro | Market facts (cheap) + strategic analysis (mid-tier) |',
       '',
-      'Research was conducted using the Perplexity Sonar deep research engine for',
-      'comprehensive web intelligence gathering. Where available, Anthropic Claude',
-      'was used for analytical synthesis and intelligence report writing.',
-      '',
+      'Perplexity Sonar models provide real-time web search with citations.',
+      'Anthropic Claude provides analytical synthesis and report writing.',
       'All findings are derived from publicly available information (OSINT).',
-      'Confidence levels are assigned to key assessments. This report should be',
-      'treated as a preliminary intelligence product and validated with primary',
-      'sources before strategic decision-making.',
     ].join('\n');
   }
 }
