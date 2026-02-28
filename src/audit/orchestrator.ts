@@ -51,14 +51,15 @@ export class AuditOrchestrator {
     const secAgent = new SecurityRiskAgent(this.perplexity, this.claude, this.config);
     const compAgent = new CompetitiveIntelAgent(this.perplexity, this.claude, this.config);
 
-    console.log('[SWARM] Dispatching 4 agents in parallel...\n');
+    console.log('[SWARM] Dispatching 4 agents (staggered to respect rate limits)...\n');
 
-    const [reconResult, techResult, secResult, compResult] = await Promise.all([
-      reconAgent.execute(),
-      techAgent.execute(),
-      secAgent.execute(),
-      compAgent.execute(),
-    ]);
+    const reconResult = await reconAgent.execute();
+    console.log('');
+    const techResult = await techAgent.execute();
+    console.log('');
+    const secResult = await secAgent.execute();
+    console.log('');
+    const compResult = await compAgent.execute();
 
     console.log('\n[SWARM] All agents reported. Compiling intelligence...\n');
 

@@ -94,26 +94,40 @@ export class PerplexityClient {
     return this.queryCount;
   }
 
-  private async callApi(messages: PerplexityMessage[]): Promise<PerplexityResponse> {
+  private async callApi(
+    messages: PerplexityMessage[],
+    retries = 3
+  ): Promise<PerplexityResponse> {
     const body = {
       model: this.model,
       messages,
     };
 
-    const res = await fetch(this.baseUrl, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${this.apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(body),
-    });
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      const res = await fetch(this.baseUrl, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${this.apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      });
 
-    if (!res.ok) {
+      if (res.ok) {
+        return res.json() as Promise<PerplexityResponse>;
+      }
+
+      if (res.status === 429 && attempt < retries) {
+        const waitSec = 15 * (attempt + 1);
+        console.log(`[PERPLEXITY] Rate limited — waiting ${waitSec}s before retry ${attempt + 1}/${retries}...`);
+        await new Promise(r => setTimeout(r, waitSec * 1000));
+        continue;
+      }
+
       const errorText = await res.text();
       throw new Error(`Perplexity API error (${res.status}): ${errorText}`);
     }
 
-    return res.json() as Promise<PerplexityResponse>;
+    throw new Error('Perplexity API: max retries exceeded');
   }
 }
