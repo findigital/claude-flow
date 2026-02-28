@@ -632,3 +632,40 @@ enabled = true
 - Issues: https://github.com/ruvnet/claude-flow/issues
 
 **Remember: Codex executes, claude-flow orchestrates!**
+
+## Cursor Cloud specific instructions
+
+### Project overview
+
+Ruflo (claude-flow) v3.5 is a TypeScript/Node.js CLI tool and framework for AI agent orchestration. There is no web UI or persistent backend server — it is a CLI + MCP stdio server with embedded WASM SQLite for memory.
+
+### Two package managers
+
+- **Root** (`/workspace`): uses `npm` (`package-lock.json`).
+- **V3 monorepo** (`/workspace/v3`): uses `pnpm` (`pnpm-lock.yaml`), with 20+ workspace packages under `v3/@claude-flow/*`.
+
+### Build order matters
+
+Run `pnpm run build` from `/workspace/v3` — it builds all 20 packages in dependency order via `pnpm -r build`. Do **not** build `@claude-flow/cli` in isolation; it depends on `@claude-flow/shared`, `@claude-flow/mcp`, `@claude-flow/swarm`, etc.
+
+### Running the CLI locally
+
+Use the built CLI binary directly: `node v3/@claude-flow/cli/bin/cli.js <command>`. Key commands for verification: `--version`, `doctor`, `swarm init`, `agent spawn`, `memory init`, `memory store`, `memory search`.
+
+### Running tests
+
+- **V3 CLI tests** (recommended): `cd v3/@claude-flow/cli && npm run test` — runs 13 test files, 445+ tests.
+- **Full V3 monorepo tests**: `cd v3 && pnpm run test` — runs all workspace tests; may segfault at cleanup due to native HNSW/GNN modules (test results are still valid).
+- **Root tests**: `npx vitest run` from workspace root — runs across both root and v3; same segfault caveat.
+
+### Lint
+
+The root `npm run lint` delegates to `v3/@claude-flow/cli` which currently has no lint script (uses `|| true`). Typecheck with `cd v3 && pnpm run typecheck`.
+
+### Known caveats
+
+- The `[AgentDB Patch] Controller index not found` warning on every CLI invocation is benign.
+- `sharp` module warnings during tests are expected; the system falls back to mock embeddings.
+- Native GNN head count warning is expected; it falls back to JS implementation.
+- `memory init --force --verbose` can take 15+ seconds due to ONNX embedding model initialization.
+- Docker, Redis, external API keys (Anthropic, OpenAI) are **not required** for building, testing, or running the CLI framework itself.
