@@ -30,7 +30,9 @@ import { ReconnaissanceAgent } from './agents/reconnaissance.js';
 import { TechIntelligenceAgent } from './agents/tech-intelligence.js';
 import { SecurityRiskAgent } from './agents/security-risk.js';
 import { CompetitiveIntelAgent } from './agents/competitive-intel.js';
+import { GovernanceAgent } from './agents/governance.js';
 import { ReportGenerator } from './report/generator.js';
+import { SlideGenerator } from './report/slides.js';
 
 export class AuditOrchestrator {
   private config: AuditConfig;
@@ -59,8 +61,9 @@ export class AuditOrchestrator {
     const techAgent = new TechIntelligenceAgent(this.perplexity, this.claude, this.config);
     const secAgent = new SecurityRiskAgent(this.perplexity, this.claude, this.config);
     const compAgent = new CompetitiveIntelAgent(this.perplexity, this.claude, this.config);
+    const govAgent = new GovernanceAgent(this.perplexity, this.claude, this.config);
 
-    console.log('[SWARM] Dispatching 4 agents sequentially...\n');
+    console.log('[SWARM] Dispatching 5 agents sequentially...\n');
 
     const reconResult = await reconAgent.execute();
     console.log('');
@@ -69,12 +72,15 @@ export class AuditOrchestrator {
     const secResult = await secAgent.execute();
     console.log('');
     const compResult = await compAgent.execute();
+    console.log('');
+    const govResult = await govAgent.execute();
 
     console.log('\n[SWARM] All agents reported. Compiling intelligence...\n');
 
     const allSources = [
       ...reconResult.sources, ...techResult.sources,
       ...secResult.sources, ...compResult.sources,
+      ...govResult.sources,
     ];
     const uniqueSources = [...new Set(allSources)];
 
@@ -89,6 +95,7 @@ export class AuditOrchestrator {
         'Technology & AI': techResult.data.engineeringCulture,
         'Security & Risk': secResult.data.overallPosture,
         'Competitive Position': compResult.data.marketPosition,
+        'AI Governance': govResult.data.currentMaturity,
       });
 
       console.log('[SYNTH] Generating strategic recommendations via Claude...');
@@ -114,7 +121,7 @@ export class AuditOrchestrator {
         targetUrl: this.config.targetUrl,
         auditDepth: this.config.depth,
         totalDurationMs: totalDuration,
-        agentCount: 4,
+        agentCount: 5,
         researchQueries: this.perplexity.totalQueries,
         version: '1.0.0',
       },
@@ -123,6 +130,7 @@ export class AuditOrchestrator {
       techIntelligence: techResult.data,
       securityRisk: secResult.data,
       competitiveIntel: compResult.data,
+      aiGovernance: govResult.data,
       riskMatrix,
       strategicRecommendations: [],
       methodology: this.getMethodology(),
@@ -131,6 +139,11 @@ export class AuditOrchestrator {
 
     const generator = new ReportGenerator();
     const outputPath = generator.generate(report, this.config.outputDir);
+
+    console.log('[SLIDES] Generating presentation deck...');
+    const slideGen = new SlideGenerator();
+    const slidePath = slideGen.generate(report, this.config.outputDir);
+    console.log(`[SLIDES] Presentation: ${slidePath}`);
 
     this.printCostSummary(totalDuration, uniqueSources.length, outputPath);
     this.reportCompletion(totalDuration);
@@ -171,6 +184,7 @@ export class AuditOrchestrator {
     console.log('│  Tech Intelligence   │  sonar-deep-research     │  $$$ PREMIUM  │');
     console.log('│  Security & Risk     │  sonar + reasoning-pro   │  $  LOW+MID   │');
     console.log('│  Competitive Intel   │  sonar + reasoning-pro   │  $  LOW+MID   │');
+    console.log('│  AI Governance       │  sonar + reasoning-pro   │  $  LOW+MID   │');
     console.log('└──────────────────────┴──────────────────────────┴───────────────┘');
     console.log('');
   }
@@ -268,6 +282,7 @@ export class AuditOrchestrator {
       '| Tech Intelligence | sonar-deep-research | Exhaustive AI/tech mapping justifies premium model |',
       '| Security & Risk | sonar + sonar-reasoning-pro | Breach facts (cheap) + risk reasoning (mid-tier) |',
       '| Competitive Intel | sonar + sonar-reasoning-pro | Market facts (cheap) + strategic analysis (mid-tier) |',
+      '| AI Governance | sonar + sonar-reasoning-pro | Policy facts (cheap) + AGENT framework (mid-tier) |',
       '',
       'Perplexity Sonar models provide real-time web search with citations.',
       'Anthropic Claude provides analytical synthesis and report writing.',

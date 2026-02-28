@@ -3,7 +3,10 @@
  *
  * Provides advanced synthesis, analytical reasoning, and
  * Palantir-style intelligence report writing capabilities.
+ * Integrates anti-slop writing rules from humanizer + stop-slop.
  */
+
+import { ANTI_SLOP_SYSTEM_PROMPT, cleanSlopFromText } from './report/anti-slop.js';
 
 interface ClaudeMessage {
   role: 'user' | 'assistant';
@@ -45,13 +48,12 @@ export class ClaudeClient {
       return '';
     }
 
-    const defaultSystem = [
+    const defaultSystem = ANTI_SLOP_SYSTEM_PROMPT + '\n\n' + [
       'You are a senior intelligence analyst writing for a Palantir-style strategic intelligence product.',
       'Write with precision, authority, and analytical rigor.',
       'Use structured formats: headers, bullet points, risk ratings.',
       'Distinguish CONFIRMED facts from ASSESSED judgments.',
       'Assign confidence levels: HIGH / MODERATE / LOW.',
-      'Be concise but comprehensive. Every sentence should carry information value.',
     ].join(' ');
 
     const messages: ClaudeMessage[] = [
@@ -84,7 +86,8 @@ export class ClaudeClient {
       }
 
       const data = await res.json() as ClaudeResponse;
-      return data.content?.[0]?.text ?? '';
+      const raw = data.content?.[0]?.text ?? '';
+      return cleanSlopFromText(raw);
     } catch (e) {
       console.warn(`[CLAUDE] Request failed: ${e}`);
       this.available = false;

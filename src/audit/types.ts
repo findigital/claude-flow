@@ -169,6 +169,118 @@ export interface StrategicRecommendation {
   impact: 'low' | 'medium' | 'high' | 'critical';
 }
 
+// ─── AI Governance & AGENT Framework ────────────────────────────
+
+export interface AIGovernanceIntelligence {
+  currentMaturity: string;
+  governancePolicies: string;
+  aiUseCases: AIUseCase[];
+  adoptionApproach: string;
+  operationalReadiness: string;
+  bestPractices: string[];
+  agentFramework: AGENTFramework;
+  sources: string[];
+}
+
+export interface AIUseCase {
+  name: string;
+  domain: string;
+  description: string;
+  maturity: 'exploring' | 'piloting' | 'scaling' | 'optimizing';
+  impact: string;
+}
+
+export interface AGENTFramework {
+  audit: AuditPhase;
+  gauge: GaugePhase;
+  engineer: EngineerPhase;
+  navigate: NavigatePhase;
+  track: TrackPhase;
+  executiveSummary: string;
+}
+
+export interface AuditPhase {
+  workflowName: string;
+  trigger: string;
+  steps: WorkflowStep[];
+  finalOutput: string;
+}
+
+export interface WorkflowStep {
+  name: string;
+  overview: string;
+  objective: string;
+  roles: string;
+  data: string;
+  systems: string;
+  output: string;
+}
+
+export interface GaugePhase {
+  expectedOutcome: string;
+  assessments: StepAssessment[];
+}
+
+export interface StepAssessment {
+  stepName: string;
+  impactScore: number;
+  repeatabilityScore: number;
+  complexityScore: number;
+  notes: string;
+}
+
+export interface EngineerPhase {
+  redesignMap: StepRedesign[];
+  challenges: StepChallenge[];
+  processRefactoring: {
+    blockers: string[];
+    removalStrategies: string[];
+    refactoredSteps: string[];
+  };
+  designSpecs: {
+    agentRoles: string;
+    orchestrationArchitecture: string;
+    keyInputs: string;
+    actions: string;
+    outputs: string;
+  };
+}
+
+export interface StepRedesign {
+  stepName: string;
+  agentAction: boolean;
+  humanAction: boolean;
+  rationale: string;
+}
+
+export interface StepChallenge {
+  stepName: string;
+  challenge: string;
+  agentSolution: string;
+}
+
+export interface NavigatePhase {
+  interactions: StepInteraction[];
+  transparency: string;
+  interventionPaths: string;
+  governance: string;
+  roleRedefinition: string;
+  trainingNeeds: string;
+}
+
+export interface StepInteraction {
+  stepName: string;
+  humanRole: string;
+  agentRole: string;
+  interactionType: string;
+}
+
+export interface TrackPhase {
+  desiredOutcome: string;
+  successSignals: string[];
+  metrics: string[];
+}
+
 // ─── Full Audit Report ──────────────────────────────────────────
 
 export interface AuditReport {
@@ -178,6 +290,7 @@ export interface AuditReport {
   techIntelligence: TechIntelligence;
   securityRisk: SecurityRiskIntelligence;
   competitiveIntel: CompetitiveIntelligence;
+  aiGovernance: AIGovernanceIntelligence;
   riskMatrix: RiskMatrixEntry[];
   strategicRecommendations: StrategicRecommendation[];
   methodology: string;

@@ -7,13 +7,14 @@
 
 import { writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
-import type { AuditReport } from '../types.js';
+import type { AuditReport, AGENTFramework } from '../types.js';
+import { cleanSlopFromText } from './anti-slop.js';
 
 export class ReportGenerator {
   generate(report: AuditReport, outputDir: string): string {
     mkdirSync(outputDir, { recursive: true });
 
-    const md = this.render(report);
+    const md = cleanSlopFromText(this.render(report));
     const filename = `ARGUS-${report.metadata.targetOrg.replace(/\W+/g, '-')}-${
       new Date().toISOString().split('T')[0]
     }.md`;
@@ -32,6 +33,8 @@ export class ReportGenerator {
       this.renderTechIntelligence(r),
       this.renderSecurityRisk(r),
       this.renderCompetitiveIntel(r),
+      this.renderAIGovernance(r),
+      this.renderAGENTFramework(r),
       this.renderRiskMatrix(r),
       this.renderStrategicRecommendations(r),
       this.renderMethodology(r),
@@ -270,11 +273,173 @@ export class ReportGenerator {
     return lines.join('\n');
   }
 
+  private renderAIGovernance(r: AuditReport): string {
+    if (!r.aiGovernance) return '';
+    const g = r.aiGovernance;
+    const lines = [
+      '# 5. AI GOVERNANCE & OPERATIONAL READINESS',
+      '',
+    ];
+
+    if (g.currentMaturity) {
+      lines.push('## 5.1 AI Maturity Assessment', '', g.currentMaturity.slice(0, 1500), '');
+    }
+
+    if (g.governancePolicies) {
+      lines.push('## 5.2 Governance Policies & Frameworks', '', g.governancePolicies, '');
+    }
+
+    if (g.bestPractices.length > 0) {
+      lines.push('## 5.3 AI Best Practices Adopted', '');
+      for (const bp of g.bestPractices) lines.push(`- ${bp}`);
+      lines.push('');
+    }
+
+    if (g.aiUseCases.length > 0) {
+      lines.push('## 5.4 AI Use Cases & Adoption', '', '| Use Case | Domain | Maturity | Description |', '|----------|--------|----------|-------------|');
+      for (const uc of g.aiUseCases) {
+        lines.push(`| ${uc.name} | ${uc.domain} | ${uc.maturity} | ${uc.description.slice(0, 80)} |`);
+      }
+      lines.push('');
+    }
+
+    if (g.adoptionApproach) {
+      lines.push('## 5.5 AI Operational Strategy', '', g.adoptionApproach.slice(0, 1500), '');
+    }
+
+    if (g.operationalReadiness) {
+      lines.push('## 5.6 Operational Readiness', '', g.operationalReadiness, '');
+    }
+
+    return lines.join('\n');
+  }
+
+  private renderAGENTFramework(r: AuditReport): string {
+    if (!r.aiGovernance?.agentFramework) return '';
+    const af = r.aiGovernance.agentFramework;
+    if (af.audit.steps.length === 0 && !af.executiveSummary) return '';
+
+    const lines = [
+      '# 6. AGENT FRAMEWORK — Agentic AI Workflow Transformation',
+      '',
+      '*Based on the Harvard Agentic AI AGENT Framework: Audit, Gauge, Engineer, Navigate, Track*',
+      '',
+    ];
+
+    // Audit Phase
+    lines.push('## 6.1 AUDIT Phase: Current Workflow', '');
+    lines.push(`**Workflow:** ${af.audit.workflowName}`, '');
+    lines.push(`**Trigger:** ${af.audit.trigger}`, '');
+
+    for (let i = 0; i < af.audit.steps.length; i++) {
+      const s = af.audit.steps[i];
+      lines.push(`### Step ${i + 1}: ${s.name}`, '');
+      lines.push(`- **Overview:** ${s.overview}`);
+      lines.push(`- **Objective:** ${s.objective}`);
+      lines.push(`- **Roles:** ${s.roles}`);
+      lines.push(`- **Data:** ${s.data}`);
+      lines.push(`- **Systems:** ${s.systems}`);
+      lines.push(`- **Output:** ${s.output}`, '');
+    }
+
+    lines.push(`**Final Output:** ${af.audit.finalOutput}`, '');
+
+    // Gauge Phase
+    lines.push('## 6.2 GAUGE Phase: Workflow Assessment', '');
+    lines.push(`**Expected Outcome:** ${af.gauge.expectedOutcome}`, '');
+
+    if (af.gauge.assessments.length > 0) {
+      lines.push('| Step | Impact | Repeatability | Complexity | Notes |', '|------|--------|--------------|------------|-------|');
+      for (const a of af.gauge.assessments) {
+        lines.push(`| ${a.stepName} | ${a.impactScore}/5 | ${a.repeatabilityScore}/5 | ${a.complexityScore}/5 | ${a.notes.slice(0, 60)} |`);
+      }
+      lines.push('');
+    }
+
+    // Engineer Phase
+    lines.push('## 6.3 ENGINEER Phase: Agent-First Workflow Redesign', '');
+
+    if (af.engineer.redesignMap.length > 0) {
+      lines.push('### Redesign Map', '', '| Step | Agent Action | Human Action | Rationale |', '|------|-------------|-------------|-----------|');
+      for (const rm of af.engineer.redesignMap) {
+        lines.push(`| ${rm.stepName} | ${rm.agentAction ? 'Yes' : 'No'} | ${rm.humanAction ? 'Yes' : 'No'} | ${rm.rationale.slice(0, 80)} |`);
+      }
+      lines.push('');
+    }
+
+    if (af.engineer.challenges.length > 0) {
+      lines.push('### Challenges & Agent Solutions', '', '| Step | Challenge | Agent Solution |', '|------|-----------|----------------|');
+      for (const c of af.engineer.challenges) {
+        lines.push(`| ${c.stepName} | ${c.challenge.slice(0, 60)} | ${c.agentSolution.slice(0, 60)} |`);
+      }
+      lines.push('');
+    }
+
+    const pr = af.engineer.processRefactoring;
+    if (pr.blockers.length > 0) {
+      lines.push('### Process Refactoring', '');
+      lines.push('**Current Blockers:**');
+      for (const b of pr.blockers) lines.push(`- ${b}`);
+      lines.push('', '**Removal Strategies:**');
+      for (const s of pr.removalStrategies) lines.push(`- ${s}`);
+      lines.push('');
+    }
+
+    const ds = af.engineer.designSpecs;
+    if (ds.agentRoles) {
+      lines.push('### Design Specifications', '');
+      lines.push(`- **Agent Roles:** ${ds.agentRoles}`);
+      lines.push(`- **Orchestration:** ${ds.orchestrationArchitecture}`);
+      lines.push(`- **Key Inputs:** ${ds.keyInputs}`);
+      lines.push(`- **Actions/Tools:** ${ds.actions}`);
+      lines.push(`- **Outputs:** ${ds.outputs}`, '');
+    }
+
+    // Navigate Phase
+    lines.push('## 6.4 NAVIGATE Phase: Human-Agent Collaboration', '');
+
+    if (af.navigate.interactions.length > 0) {
+      lines.push('| Step | Human Role | Agent Role | Interaction |', '|------|-----------|------------|-------------|');
+      for (const i of af.navigate.interactions) {
+        lines.push(`| ${i.stepName} | ${i.humanRole.slice(0, 40)} | ${i.agentRole.slice(0, 40)} | ${i.interactionType.slice(0, 40)} |`);
+      }
+      lines.push('');
+    }
+
+    if (af.navigate.transparency) lines.push(`**Transparency:** ${af.navigate.transparency}`, '');
+    if (af.navigate.governance) lines.push(`**Governance:** ${af.navigate.governance}`, '');
+    if (af.navigate.roleRedefinition) lines.push(`**Role Redefinition:** ${af.navigate.roleRedefinition}`, '');
+    if (af.navigate.trainingNeeds) lines.push(`**Training:** ${af.navigate.trainingNeeds}`, '');
+
+    // Track Phase
+    lines.push('## 6.5 TRACK Phase: Value Measurement', '');
+    if (af.track.desiredOutcome) lines.push(`**Desired Outcome:** ${af.track.desiredOutcome}`, '');
+
+    if (af.track.successSignals.length > 0) {
+      lines.push('**Success Signals:**');
+      for (const s of af.track.successSignals) lines.push(`- ${s}`);
+      lines.push('');
+    }
+
+    if (af.track.metrics.length > 0) {
+      lines.push('**Metrics:**');
+      for (const m of af.track.metrics) lines.push(`- ${m}`);
+      lines.push('');
+    }
+
+    // Executive Summary
+    if (af.executiveSummary) {
+      lines.push('## 6.6 AGENT Framework Executive Summary', '', af.executiveSummary, '');
+    }
+
+    return lines.join('\n');
+  }
+
   private renderRiskMatrix(r: AuditReport): string {
     if (r.riskMatrix.length === 0) return '';
 
     const lines = [
-      '# 5. RISK MATRIX',
+      '# 7. RISK MATRIX',
       '',
       '| Category | Risk | Likelihood | Impact | Score | Level |',
       '|----------|------|-----------|--------|-------|-------|',
@@ -290,7 +455,7 @@ export class ReportGenerator {
 
   private renderStrategicRecommendations(r: AuditReport): string {
     return [
-      '# 6. STRATEGIC RECOMMENDATIONS',
+      '# 8. STRATEGIC RECOMMENDATIONS',
       '',
       r.strategicRecommendations.length > 0
         ? r.strategicRecommendations.map((rec, i) =>
@@ -301,7 +466,7 @@ export class ReportGenerator {
   }
 
   private renderMethodology(r: AuditReport): string {
-    return ['# 7. METHODOLOGY', '', r.methodology].join('\n');
+    return ['# 9. METHODOLOGY', '', r.methodology].join('\n');
   }
 
   private renderSourceAppendix(r: AuditReport): string {
